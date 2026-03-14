@@ -23,6 +23,7 @@ const enum InstructionDiscriminant {
   CreateSessionKey = 2,
   ExecuteViaSession = 3,
   RevokeSession = 4,
+  TransferLamports = 13,
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -216,4 +217,79 @@ export async function checkAgentExists(
   const [pda] = deriveAgentPda(walletPda, agentPubkey);
   const account = await connection.getAccountInfo(pda);
   return { exists: account !== null, pda };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TransferLamports (disc 13) — move SOL from wallet PDA out
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Build a TransferLamports instruction for the Seal program.
+ *
+ * Moves SOL from the wallet PDA to a destination, authorized by
+ * a valid session key. Used to fund session keypairs for tx fees.
+ *
+ * Accounts:
+ *   0. session key (signer)
+ *   1. wallet PDA (writable)
+ *   2. agent config PDA (writable)
+ *   3. session PDA (writable)
+ *   4. destination (writable)
+ *
+ * Data: [disc=13][amount_u64_LE]
+ */
+export function buildTransferLamportsInstruction(args: {
+  sessionKeypair: Keypair;
+  walletOwner: PublicKey;
+  agentPubkey: PublicKey;
+  destination: PublicKey;
+  amountLamports: bigint;
+}): TransactionInstruction {
+  const [walletPda] = deriveWalletPda(args.walletOwner);
+  const [agentPda] = deriveAgentPda(walletPda, args.agentPubkey);
+  const [sessionPda] = deriveSessionPda(
+    walletPda,
+    args.agentPubkey,
+    args.sessionKeypair.publicKey
+  );
+
+  const data = Buffer.concat([
+    Buffer.from([InstructionDiscriminant.TransferLamports]),
+    encodeU64(args.amountLamports),
+  ]);
+
+  return new TransactionInstruction({
+    programId: SEAL_PROGRAM_ID,
+    keys: [
+      { pubkey: args.sessionKeypair.publicKey, isSigner: true, isWritable: false },
+      { pubkey: walletPda, isSigner: false, isWritable: true },
+      { pubkey: agentPda, isSigner: false, isWritable: true },
+      { pubkey: sessionPda, isSigner: false, isWritable: true },
+      { pubkey: args.destination, isSigner: false, isWritable: true },
+    ],
+    data,
+  });
+}
+
+/**
+ * Fund a session keypair from the wallet PDA using TransferLamports.
+ * The session keypair signs (and pays tx fee), so it must already
+ * have a small amount of SOL for the initial funding tx fee.
+ */
+export async function fundSessionFromWallet(args: {
+  sessionKeypair: Keypair;
+  walletOwner: PublicKey;
+  agentPubkey: PublicKey;
+  amountLamports: bigint;
+}): Promise<string> {
+  const connection = getConnection();
+  const ix = buildTransferLamportsInstruction({
+    sessionKeypair: args.sessionKeypair,
+    walletOwner: args.walletOwner,
+    agentPubkey: args.agentPubkey,
+    destination: args.sessionKeypair.publicKey,
+    amountLamports: args.amountLamports,
+  });
+  const tx = new Transaction().add(ix);
+  return sendAndConfirmTransaction(connection, tx, [args.sessionKeypair]);
 }

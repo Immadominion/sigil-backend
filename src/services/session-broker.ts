@@ -1,4 +1,4 @@
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, sessions, pairingTokens, activityLog } from "../db/schema.js";
@@ -8,6 +8,7 @@ import {
   deriveWalletPda,
   deriveSessionPda,
   deriveAgentPda,
+  getConnection,
 } from "./solana.js";
 import { eventBus } from "./event-bus.js";
 
@@ -98,6 +99,27 @@ export async function createSession(
     maxAmountLamports: BigInt(maxAmountLamports),
     maxPerTxLamports: BigInt(maxPerTxLamports),
   });
+
+  // 4a. Fund session keypair from agent keypair (~0.005 SOL for tx fees)
+  // The agent keypair was funded during RegisterAgent in the Sigil app.
+  const SESSION_FEE_FUND = 5_000_000; // 0.005 SOL — enough for ~1000 tx fees
+  try {
+    const connection = getConnection();
+    const agentBalance = await connection.getBalance(agentKeypair.publicKey);
+    if (agentBalance > SESSION_FEE_FUND + 5000) {
+      const fundTx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: agentKeypair.publicKey,
+          toPubkey: sessionKeypair.publicKey,
+          lamports: SESSION_FEE_FUND,
+        })
+      );
+      await sendAndConfirmTransaction(connection, fundTx, [agentKeypair]);
+    }
+  } catch (err) {
+    // Non-fatal — session still created, agent SDK can fund later
+    console.warn("Session fee funding failed (non-fatal):", err);
+  }
 
   const [walletPda] = deriveWalletPda(walletOwner);
   const expiresAt = new Date(Date.now() + durationSecs * 1000);

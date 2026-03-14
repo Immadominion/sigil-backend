@@ -103,4 +103,4 @@ console.log(`
 ╚═══════════════════════════════════════════╝
 `);
 
-serve({ fetch: app.fetch, port });
+serve({ fetch: app.fetch, port, hostname: "0.0.0.0" });

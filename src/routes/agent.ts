@@ -113,6 +113,107 @@ agent.post("/", async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// GET /approvals — List pending session approval requests
+// (Must be before /:id to prevent "approvals" matching as an id)
+// ═══════════════════════════════════════════════════════════════
+agent.get("/approvals", async (c) => {
+  const { walletId } = getAuthPayload(c);
+
+  const pending = await db.query.pendingApprovals.findMany({
+    where: and(
+      eq(pendingApprovals.walletId, walletId),
+      eq(pendingApprovals.status, "pending")
+    ),
+    with: {
+      agent: { columns: { id: true, name: true, agentPubkey: true } },
+    },
+    orderBy: (p, { desc }) => desc(p.createdAt),
+  });
+
+  return c.json(pending);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /approvals/:approvalId/approve — Approve a session request
+// ═══════════════════════════════════════════════════════════════
+agent.post("/approvals/:approvalId/approve", async (c) => {
+  const { walletId } = getAuthPayload(c);
+  const approvalId = parseInt(c.req.param("approvalId"));
+
+  const approval = await db.query.pendingApprovals.findFirst({
+    where: and(
+      eq(pendingApprovals.id, approvalId),
+      eq(pendingApprovals.walletId, walletId),
+      eq(pendingApprovals.status, "pending")
+    ),
+  });
+
+  if (!approval) {
+    return c.json({ error: "Pending approval not found" }, 404);
+  }
+
+  try {
+    const result = await createSession({
+      agentId: approval.agentId,
+      pairingTokenId: approval.pairingTokenId,
+      durationSecs: approval.durationSecs,
+      maxAmountSol: approval.maxAmountLamports / 1_000_000_000,
+      maxPerTxSol: approval.maxPerTxLamports / 1_000_000_000,
+    });
+
+    await db
+      .update(pendingApprovals)
+      .set({ status: "approved", resolvedAt: new Date() })
+      .where(eq(pendingApprovals.id, approvalId));
+
+    await db.insert(activityLog).values({
+      walletId,
+      agentId: approval.agentId,
+      action: "session_approved",
+      details: { approvalId, sessionPda: result.sessionPda },
+    });
+
+    return c.json({ success: true, session: result }, 201);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Session creation failed";
+    return c.json({ error: message }, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// POST /approvals/:approvalId/reject — Reject a session request
+// ═══════════════════════════════════════════════════════════════
+agent.post("/approvals/:approvalId/reject", async (c) => {
+  const { walletId } = getAuthPayload(c);
+  const approvalId = parseInt(c.req.param("approvalId"));
+
+  const [updated] = await db
+    .update(pendingApprovals)
+    .set({ status: "rejected", resolvedAt: new Date() })
+    .where(
+      and(
+        eq(pendingApprovals.id, approvalId),
+        eq(pendingApprovals.walletId, walletId),
+        eq(pendingApprovals.status, "pending")
+      )
+    )
+    .returning();
+
+  if (!updated) {
+    return c.json({ error: "Pending approval not found" }, 404);
+  }
+
+  await db.insert(activityLog).values({
+    walletId,
+    agentId: updated.agentId,
+    action: "session_rejected",
+    details: { approvalId },
+  });
+
+  return c.json({ success: true });
+});
+
+// ═══════════════════════════════════════════════════════════════
 // GET /:id — Get agent details
 // ═══════════════════════════════════════════════════════════════
 agent.get("/:id", async (c) => {
@@ -245,108 +346,6 @@ agent.post("/:id/revoke-sessions", async (c) => {
   });
 
   return c.json({ success: true, revokedCount });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// GET /approvals — List pending session approval requests
-// ═══════════════════════════════════════════════════════════════
-agent.get("/approvals", async (c) => {
-  const { walletId } = getAuthPayload(c);
-
-  const pending = await db.query.pendingApprovals.findMany({
-    where: and(
-      eq(pendingApprovals.walletId, walletId),
-      eq(pendingApprovals.status, "pending")
-    ),
-    with: {
-      agent: { columns: { id: true, name: true, agentPubkey: true } },
-    },
-    orderBy: (p, { desc }) => desc(p.createdAt),
-  });
-
-  return c.json(pending);
-});
-
-// ═══════════════════════════════════════════════════════════════
-// POST /approvals/:approvalId/approve — Approve a session request
-// ═══════════════════════════════════════════════════════════════
-agent.post("/approvals/:approvalId/approve", async (c) => {
-  const { walletId } = getAuthPayload(c);
-  const approvalId = parseInt(c.req.param("approvalId"));
-
-  const approval = await db.query.pendingApprovals.findFirst({
-    where: and(
-      eq(pendingApprovals.id, approvalId),
-      eq(pendingApprovals.walletId, walletId),
-      eq(pendingApprovals.status, "pending")
-    ),
-  });
-
-  if (!approval) {
-    return c.json({ error: "Pending approval not found" }, 404);
-  }
-
-  try {
-    // Create the session
-    const result = await createSession({
-      agentId: approval.agentId,
-      pairingTokenId: approval.pairingTokenId,
-      durationSecs: approval.durationSecs,
-      maxAmountSol: approval.maxAmountLamports / 1_000_000_000,
-      maxPerTxSol: approval.maxPerTxLamports / 1_000_000_000,
-    });
-
-    // Mark approval as approved
-    await db
-      .update(pendingApprovals)
-      .set({ status: "approved", resolvedAt: new Date() })
-      .where(eq(pendingApprovals.id, approvalId));
-
-    await db.insert(activityLog).values({
-      walletId,
-      agentId: approval.agentId,
-      action: "session_approved",
-      details: { approvalId, sessionPda: result.sessionPda },
-    });
-
-    return c.json({ success: true, session: result }, 201);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Session creation failed";
-    return c.json({ error: message }, 500);
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════
-// POST /approvals/:approvalId/reject — Reject a session request
-// ═══════════════════════════════════════════════════════════════
-agent.post("/approvals/:approvalId/reject", async (c) => {
-  const { walletId } = getAuthPayload(c);
-  const approvalId = parseInt(c.req.param("approvalId"));
-
-  const [updated] = await db
-    .update(pendingApprovals)
-    .set({ status: "rejected", resolvedAt: new Date() })
-    .where(
-      and(
-        eq(pendingApprovals.id, approvalId),
-        eq(pendingApprovals.walletId, walletId),
-        eq(pendingApprovals.status, "pending")
-      )
-    )
-    .returning();
-
-  if (!updated) {
-    return c.json({ error: "Pending approval not found" }, 404);
-  }
-
-  await db.insert(activityLog).values({
-    walletId,
-    agentId: updated.agentId,
-    action: "session_rejected",
-    details: { approvalId },
-  });
-
-  return c.json({ success: true });
 });
 
 export default agent;

@@ -86,6 +86,7 @@ wallet.post("/revoke-all", async (c) => {
   // Log the emergency action
   await db.insert(activityLog).values({
     walletId,
+    agentId: null,
     action: "emergency_revoke_all",
     details: {
       agentsAffected: walletAgents.length,
@@ -124,6 +125,7 @@ wallet.post("/lock", async (c) => {
 
   await db.insert(activityLog).values({
     walletId,
+    agentId: null,
     action: "wallet_locked",
     details: { lockedAt: new Date().toISOString() },
   });
@@ -152,6 +154,7 @@ wallet.post("/unlock", async (c) => {
 
   await db.insert(activityLog).values({
     walletId,
+    agentId: null,
     action: "wallet_unlocked",
     details: { unlockedAt: new Date().toISOString() },
   });
@@ -405,6 +408,7 @@ wallet.post("/withdraw", async (c) => {
   // Log the withdrawal attempt
   await db.insert(activityLog).values({
     walletId,
+    agentId: null,
     action: "withdraw_initiated",
     details: {
       withdrawSol: +withdrawSol.toFixed(6),
@@ -455,6 +459,7 @@ wallet.post("/submit-signed", async (c) => {
 
   await db.insert(activityLog).values({
     walletId,
+    agentId: null,
     action: "transaction_submitted",
     details: { signature },
     txSignature: signature,

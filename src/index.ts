@@ -6,6 +6,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { bodyLimit } from "hono/body-limit";
 import { config } from "./config.js";
 import { rateLimiter } from "./middleware/rate-limit.js";
+import { runMigrations } from "./db/index.js";
 
 import authRoutes from "./routes/auth.js";
 import walletRoutes from "./routes/wallet.js";
@@ -92,7 +93,10 @@ app.onError((err, c) => {
 // ═══════════════════════════════════════════════════════════════
 const port = config.PORT;
 
-console.log(`
+// Run migrations then start
+runMigrations()
+  .then(() => {
+    console.log(`
 ╔═══════════════════════════════════════════╗
 ║           ⬡ SIGIL BACKEND ⬡              ║
 ║   Seal Wallet Credential Broker           ║
@@ -103,4 +107,9 @@ console.log(`
 ╚═══════════════════════════════════════════╝
 `);
 
-serve({ fetch: app.fetch, port, hostname: "0.0.0.0" });
+    serve({ fetch: app.fetch, port, hostname: "0.0.0.0" });
+  })
+  .catch((err) => {
+    console.error("Failed to run migrations:", err);
+    process.exit(1);
+  });

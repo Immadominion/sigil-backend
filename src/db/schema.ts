@@ -1,6 +1,7 @@
 import {
   pgTable,
   serial,
+  integer,
   text,
   timestamp,
   boolean,
@@ -42,7 +43,7 @@ export const agents = pgTable(
   "agents",
   {
     id: serial("id").primaryKey(),
-    walletId: serial("wallet_id")
+    walletId: integer("wallet_id")
       .references(() => wallets.id, { onDelete: "cascade" })
       .notNull(),
     agentPubkey: text("agent_pubkey").notNull(),
@@ -82,7 +83,7 @@ export const pairingTokens = pgTable(
   "pairing_tokens",
   {
     id: serial("id").primaryKey(),
-    agentId: serial("agent_id")
+    agentId: integer("agent_id")
       .references(() => agents.id, { onDelete: "cascade" })
       .notNull(),
     tokenHash: text("token_hash").notNull(),
@@ -107,10 +108,10 @@ export const sessions = pgTable(
   "sessions",
   {
     id: serial("id").primaryKey(),
-    agentId: serial("agent_id")
+    agentId: integer("agent_id")
       .references(() => agents.id, { onDelete: "cascade" })
       .notNull(),
-    pairingTokenId: serial("pairing_token_id")
+    pairingTokenId: integer("pairing_token_id")
       .references(() => pairingTokens.id)
       .notNull(),
     sessionPda: text("session_pda").notNull(),
@@ -147,10 +148,10 @@ export const activityLog = pgTable(
   "activity_log",
   {
     id: serial("id").primaryKey(),
-    walletId: serial("wallet_id")
+    walletId: integer("wallet_id")
       .references(() => wallets.id, { onDelete: "cascade" })
       .notNull(),
-    agentId: serial("agent_id").references(() => agents.id),
+    agentId: integer("agent_id").references(() => agents.id),
     action: text("action").notNull(),
     details: jsonb("details"),
     txSignature: text("tx_signature"),
@@ -188,13 +189,13 @@ export const pendingApprovals = pgTable(
   "pending_approvals",
   {
     id: serial("id").primaryKey(),
-    agentId: serial("agent_id")
+    agentId: integer("agent_id")
       .references(() => agents.id, { onDelete: "cascade" })
       .notNull(),
-    pairingTokenId: serial("pairing_token_id")
+    pairingTokenId: integer("pairing_token_id")
       .references(() => pairingTokens.id)
       .notNull(),
-    walletId: serial("wallet_id")
+    walletId: integer("wallet_id")
       .references(() => wallets.id, { onDelete: "cascade" })
       .notNull(),
     durationSecs: bigint("duration_secs", { mode: "number" }).notNull(),

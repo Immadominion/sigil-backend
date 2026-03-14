@@ -273,14 +273,16 @@ export function buildTransferLamportsInstruction(args: {
 
 /**
  * Fund a session keypair from the wallet PDA using TransferLamports.
- * The session keypair signs (and pays tx fee), so it must already
- * have a small amount of SOL for the initial funding tx fee.
+ *
+ * If feePayerKeypair is provided, it pays the TX fee (useful when the
+ * session keypair has 0 SOL). Otherwise the session keypair pays.
  */
 export async function fundSessionFromWallet(args: {
   sessionKeypair: Keypair;
   walletOwner: PublicKey;
   agentPubkey: PublicKey;
   amountLamports: bigint;
+  feePayerKeypair?: Keypair;
 }): Promise<string> {
   const connection = getConnection();
   const ix = buildTransferLamportsInstruction({
@@ -291,5 +293,10 @@ export async function fundSessionFromWallet(args: {
     amountLamports: args.amountLamports,
   });
   const tx = new Transaction().add(ix);
-  return sendAndConfirmTransaction(connection, tx, [args.sessionKeypair]);
+  const signers: Keypair[] = [args.sessionKeypair];
+  if (args.feePayerKeypair) {
+    tx.feePayer = args.feePayerKeypair.publicKey;
+    signers.unshift(args.feePayerKeypair);
+  }
+  return sendAndConfirmTransaction(connection, tx, signers);
 }

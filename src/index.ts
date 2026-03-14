@@ -26,10 +26,7 @@ app.use("*", bodyLimit({ maxSize: 1024 * 1024 })); // 1 MB max body
 app.use(
   "*",
   cors({
-    origin:
-      config.NODE_ENV === "production"
-        ? [config.FRONTEND_ORIGIN]
-        : "*",
+    origin: "*",
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     maxAge: 86400,

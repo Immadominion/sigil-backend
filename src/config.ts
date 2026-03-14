@@ -21,7 +21,7 @@ const envSchema = z.object({
 
   SEAL_PROGRAM_ID: z.string().default("EV3TKRVz7pTHpAqBTjP8jmwuvoRBRCpjmVSPHhcMnXqb"),
 
-  FRONTEND_ORIGIN: z.string().url().default("https://sigil.app"),
+  FRONTEND_ORIGIN: z.string().default("http://localhost:8081"),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60_000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(60),

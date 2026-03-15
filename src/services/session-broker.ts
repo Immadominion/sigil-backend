@@ -1,4 +1,4 @@
-import { Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { agents, sessions, pairingTokens, activityLog } from "../db/schema.js";
@@ -6,10 +6,7 @@ import { encryptKeypairSecret, decryptKeypairSecret } from "./crypto.js";
 import {
   createSessionOnChain,
   deriveWalletPda,
-  deriveSessionPda,
-  deriveAgentPda,
   getConnection,
-  buildTransferLamportsInstruction,
 } from "./solana.js";
 import { eventBus } from "./event-bus.js";
 
@@ -92,6 +89,27 @@ export async function createSession(
   const maxPerTxLamports = Math.min(requestedMaxPerTx, agent.perTxLimitLamports);
 
   // 4. Submit on-chain (convert to BigInt for instruction encoding)
+  // The session creation and funding are ATOMIC — bundled in a single TX.
+  // If the wallet PDA has funds, TransferLamports is included in the same
+  // TX as CreateSession, so the session keypair is guaranteed to have SOL
+  // for fees when the TX succeeds.
+  const SESSION_FEE_FUND = 5_000_000; // 0.005 SOL — enough for ~1000 tx fees
+  const [walletPda] = deriveWalletPda(walletOwner);
+  const connection = getConnection();
+
+  // Check wallet PDA balance to decide whether to bundle funding
+  let fundSessionLamports: bigint | undefined;
+  const walletBalance = await connection.getBalance(walletPda);
+  const MIN_WALLET_RENT = 2_500_000; // keep rent-exempt minimum on PDA
+
+  if (walletBalance > SESSION_FEE_FUND + MIN_WALLET_RENT) {
+    fundSessionLamports = BigInt(SESSION_FEE_FUND);
+  } else {
+    console.warn(
+      `Wallet PDA has ${walletBalance} lamports — insufficient to fund session fees. Session will have 0 SOL for fees.`
+    );
+  }
+
   const { signature, sessionPda } = await createSessionOnChain({
     agentKeypair,
     walletOwner,
@@ -99,52 +117,8 @@ export async function createSession(
     durationSecs: BigInt(durationSecs),
     maxAmountLamports: BigInt(maxAmountLamports),
     maxPerTxLamports: BigInt(maxPerTxLamports),
+    fundSessionLamports,
   });
-
-  // 4a. Fund session keypair for tx fees (~0.005 SOL)
-  // Strategy: Use TransferLamports (disc 13) to move SOL from the wallet PDA
-  // into the session keypair. The agent keypair pays the TX fee (it still has
-  // SOL from RegisterAgent), and the session keypair signs the TransferLamports
-  // instruction. This is more reliable than SystemProgram.transfer from the
-  // agent keypair which depletes after a few sessions.
-  const SESSION_FEE_FUND = 5_000_000; // 0.005 SOL — enough for ~1000 tx fees
-  const [walletPda] = deriveWalletPda(walletOwner);
-  try {
-    const connection = getConnection();
-    const walletBalance = await connection.getBalance(walletPda);
-    const MIN_WALLET_RENT = 2_500_000; // keep rent-exempt minimum on PDA
-
-    if (walletBalance > SESSION_FEE_FUND + MIN_WALLET_RENT) {
-      // Use TransferLamports from wallet PDA → session keypair.
-      // Agent keypair = fee payer, session keypair = TransferLamports signer.
-      const ix = buildTransferLamportsInstruction({
-        sessionKeypair,
-        walletOwner,
-        agentPubkey: agentKeypair.publicKey,
-        destination: sessionKeypair.publicKey,
-        amountLamports: BigInt(SESSION_FEE_FUND),
-      });
-      const fundTx = new Transaction().add(ix);
-      fundTx.feePayer = agentKeypair.publicKey;
-      await sendAndConfirmTransaction(connection, fundTx, [agentKeypair, sessionKeypair]);
-    } else {
-      // Fallback: try direct SystemProgram.transfer from agent keypair
-      const agentBalance = await connection.getBalance(agentKeypair.publicKey);
-      if (agentBalance > SESSION_FEE_FUND + 5000) {
-        const fundTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: agentKeypair.publicKey,
-            toPubkey: sessionKeypair.publicKey,
-            lamports: SESSION_FEE_FUND,
-          })
-        );
-        await sendAndConfirmTransaction(connection, fundTx, [agentKeypair]);
-      }
-    }
-  } catch (err) {
-    // Non-fatal — session still created, but agent SDK operations needing fees will fail
-    console.warn("Session fee funding failed (non-fatal):", err);
-  }
 
   const expiresAt = new Date(Date.now() + durationSecs * 1000);
 

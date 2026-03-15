@@ -171,18 +171,22 @@ export function buildRevokeSessionInstruction(args: {
 
 /**
  * Send a CreateSession transaction on-chain.
+ *
+ * When `fundSessionLamports` is provided, a TransferLamports instruction
+ * is bundled into the SAME transaction so session creation + funding is
+ * atomic — either both succeed or both fail. This eliminates the race
+ * condition where a session is created but unfunded.
+ *
  * Returns the transaction signature and session PDA.
  */
 export async function createSessionOnChain(
-  args: CreateSessionArgs
+  args: CreateSessionArgs & { fundSessionLamports?: bigint }
 ): Promise<{ signature: string; sessionPda: PublicKey }> {
   const connection = getConnection();
-  const ix = buildCreateSessionInstruction(args);
-  const tx = new Transaction().add(ix);
+  const tx = new Transaction();
 
-  const signature = await sendAndConfirmTransaction(connection, tx, [
-    args.agentKeypair,
-  ]);
+  // 1. CreateSession instruction
+  tx.add(buildCreateSessionInstruction(args));
 
   const [walletPda] = deriveWalletPda(args.walletOwner);
   const [sessionPda] = deriveSessionPda(
@@ -190,6 +194,27 @@ export async function createSessionOnChain(
     args.agentKeypair.publicKey,
     args.sessionKeypair.publicKey
   );
+
+  const signers: Keypair[] = [args.agentKeypair];
+
+  // 2. Optionally bundle TransferLamports to fund the session keypair.
+  //    Solana processes instructions sequentially within a TX, so the
+  //    session PDA created by instruction 1 is available for instruction 2.
+  if (args.fundSessionLamports && args.fundSessionLamports > 0n) {
+    tx.add(
+      buildTransferLamportsInstruction({
+        sessionKeypair: args.sessionKeypair,
+        walletOwner: args.walletOwner,
+        agentPubkey: args.agentKeypair.publicKey,
+        destination: args.sessionKeypair.publicKey,
+        amountLamports: args.fundSessionLamports,
+      })
+    );
+    // Session keypair must also sign (TransferLamports account #0 = signer)
+    signers.push(args.sessionKeypair);
+  }
+
+  const signature = await sendAndConfirmTransaction(connection, tx, signers);
 
   return { signature, sessionPda };
 }
